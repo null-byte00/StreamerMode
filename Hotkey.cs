@@ -19,20 +19,27 @@ public static class Hotkey
                 case "shift": mods |= Native.MOD_SHIFT; break;
                 case "win": mods |= Native.MOD_WIN; break;
                 default:
-                    var key = (Key)Enum.Parse(typeof(Key), part, true);
-                    vk = (uint)KeyInterop.VirtualKeyFromKey(key);
+                    try { vk = (uint)KeyInterop.VirtualKeyFromKey((Key)Enum.Parse(typeof(Key), part, true)); }
+                    catch { }
                     break;
             }
         }
         return vk != 0;
     }
 
-    public const int Id = 1;
+    public const int MasterId = 1;
+    public const int RuleIdBase = 100;   // id правила = 100 + индекс в Rules
 
-    public static void Register(IntPtr hwnd, string text)
+    public static void Register(IntPtr hwnd, string text, int id)
     {
-        Native.UnregisterHotKey(hwnd, Id);
+        Native.UnregisterHotKey(hwnd, id);
         if (TryParse(text, out var m, out var v))
-            Native.RegisterHotKey(hwnd, Id, m | Native.MOD_NOREPEAT, v);
+            Native.RegisterHotKey(hwnd, id, m | Native.MOD_NOREPEAT, v);
+    }
+
+    public static void UnregisterAll(IntPtr hwnd, int ruleCount)
+    {
+        Native.UnregisterHotKey(hwnd, MasterId);
+        for (int i = 0; i < ruleCount + 8; i++) Native.UnregisterHotKey(hwnd, RuleIdBase + i);
     }
 }

@@ -1,10 +1,9 @@
 ﻿using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.ComponentModel;
-using System.Runtime.CompilerServices;
 
 namespace StreamerMode;
 
@@ -13,16 +12,13 @@ public partial class MainWindow : Window
     readonly Settings _s;
     readonly HideEngine _engine;
     bool _loading;
+    Rule? _binding;            // правило, для которого ловим комбо
 
-    sealed class Row : INotifyPropertyChanged
+    sealed class WinRow
     {
         public Native.Win Win = null!;
         public string Title => Win.Title;
         public string Proc => Win.Proc;
-        public bool WholeProc { get; set; }
-        int _modeIndex;
-        public int ModeIndex { get => _modeIndex; set { _modeIndex = value; } }
-        public event PropertyChangedEventHandler? PropertyChanged { add { } remove { } }
     }
 
     public MainWindow(Settings s, HideEngine engine)
@@ -31,7 +27,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         _loading = true;
         ModeToggle.IsChecked = s.ModeOn;
-        ModeStatus.Text = s.ModeOn ? "ВКЛ — окна 'по режиму' скрыты в записи" : "выкл — всё видно в записи";
+        RefreshModeStatus();
         HotkeyBox.Text = s.Hotkey;
         AutostartBox.IsChecked = s.StartWithWindows;
         _loading = false;
@@ -41,7 +37,9 @@ public partial class MainWindow : Window
         CheckUpdate();
     }
 
+    // ---------- апдейт ----------
     string _updateUrl = "";
+    bool _updating;
 
     async void CheckUpdate()
     {
@@ -49,15 +47,13 @@ public partial class MainWindow : Window
         var (hasNew, tag, url) = await Updater.CheckAsync();
         if (hasNew)
         {
-            UpdateStatus.Text = "есть обновление " + tag + " (у тебя " + Updater.Current + ")";
-            UpdateBtn.Content = "Обновить до " + tag;
+            UpdateStatus.Text = "есть " + tag;
+            UpdateBtn.Content = "→ " + tag;
             UpdateBtn.Visibility = Visibility.Visible;
             _updateUrl = url;
         }
-        else UpdateStatus.Text = "v" + Updater.Current + " — последняя";
+        else UpdateStatus.Text = "v" + Updater.Current;
     }
-
-    bool _updating;
 
     async void Update_Click(object s, RoutedEventArgs e)
     {
@@ -69,7 +65,7 @@ public partial class MainWindow : Window
             var prog = new Progress<int>(p => UpdateStatus.Text = "качаю… " + p + "%");
             UpdateBtn.IsEnabled = false;
             await Updater.DownloadAsync(_updateUrl, tmp, prog);
-            UpdateStatus.Text = "ставлю и перезапускаю…";
+            UpdateStatus.Text = "ставлю…";
             Updater.ApplyAndRestart(tmp);
         }
         catch (Exception ex)
@@ -80,75 +76,213 @@ public partial class MainWindow : Window
         }
     }
 
+    // ---------- режим ----------
     void RefreshModeStatus() =>
-        ModeStatus.Text = _s.ModeOn ? "ВКЛ — окна 'по режиму' скрыты в записи" : "выкл — всё видно в записи";
-
-    public void ToggleMode() => ModeToggle.IsChecked = !_s.ModeOn;
+        ModeStatus.Text = _s.ModeOn ? "ВКЛ — окна «по режиму» скрыты" : "выкл — всё видно в записи";
 
     void ModeToggle_Checked(object s, RoutedEventArgs e) { if (!_loading) { _engine.ModeOn = true; RefreshModeStatus(); } }
     void ModeToggle_Unchecked(object s, RoutedEventArgs e) { if (!_loading) { _engine.ModeOn = false; RefreshModeStatus(); } }
 
-    void Refresh_Click(object s, RoutedEventArgs e) => RefreshWindows();
+    void Refresh_Click(object s, RoutedEventArgs e) { RefreshWindows(); RefreshRules(); }
 
+    // ---------- список окон (справа) ----------
     void RefreshWindows()
     {
-        var rows = new List<Row>();
-        foreach (var w in Native.EnumUserWindows().OrderBy(w => w.Proc).ThenBy(w => w.Title))
-        {
-            var rule = _s.Rules.FirstOrDefault(r => r.Matches(w));
-            rows.Add(new Row
-            {
-                Win = w,
-                WholeProc = rule != null && rule.TitleContains == "",
-                ModeIndex = rule?.Mode switch { HideMode.Always => 2, HideMode.OnMode => 1, _ => 0 }
-            });
-        }
-        WinList.ItemsSource = rows;
+        WinList.ItemsSource = Native.EnumUserWindows()
+            .OrderBy(w => w.Proc).ThenBy(w => w.Title)
+            .Select(w => new WinRow { Win = w }).ToList();
     }
+
+    void Hide_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button b || b.Tag is not WinRow row) return;
+        _engine.SetRule(row.Win, HideMode.Always, false);
+        RefreshRules();
+    }
+
+    // ---------- список приложений (слева) ----------
+    static readonly Brush Txt3 = new SolidColorBrush(Color.FromRgb(0x8A, 0x8A, 0x8A));
+    static readonly Brush Txt = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
+    static readonly Brush Accent = new SolidColorBrush(Color.FromRgb(0x4C, 0xC2, 0xFF));
+    static readonly Brush Red = new SolidColorBrush(Color.FromRgb(0xFF, 0x99, 0xA4));
+
+    Button Pill(string text, Brush fg) => new()
+    {
+        Style = (Style)FindResource("FlatBtn"),
+        Content = text,
+        Foreground = fg,
+        Padding = new Thickness(8, 3, 8, 3),
+        Margin = new Thickness(4, 0, 0, 0)
+    };
 
     void RefreshRules()
     {
         RulesList.ItemsSource = _s.Rules.Select(r =>
         {
-            var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
-            var del = new Button { Content = "✕", Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(6, 0, 0, 0) };
-            del.Click += (_, _) => { _s.Rules.Remove(r); _s.Save(); RefreshRules(); RefreshWindows(); };
-            DockPanel.SetDock(del, Dock.Right);
-            row.Children.Add(del);
-            var label = r.TitleContains == "" ? r.Proc + " — любое окно" : r.Proc + " — «" + r.TitleContains + "»";
-            row.Children.Add(new TextBlock
+            var grid = new Grid { Margin = new Thickness(0, 3, 0, 3) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var name = r.TitleContains == "" ? r.Proc + " — всё" : r.Proc;
+            var label = new TextBlock
             {
-                Text = label + "   [" + (r.Mode == HideMode.Always ? "всегда" : "по режиму") + "]",
-                VerticalAlignment = VerticalAlignment.Center,
-                Foreground = System.Windows.Media.Brushes.LightGray
-            });
-            return row;
+                Text = r.TitleContains == "" ? r.Proc + " — все окна" : r.Proc + " — «" + r.TitleContains + "»",
+                Foreground = Txt, FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                ToolTip = r.FullTitle
+            };
+            Grid.SetColumn(label, 0);
+            grid.Children.Add(label);
+
+            // бинд хоткея
+            var bind = Pill(r.Hotkey.Length > 0 ? r.Hotkey : "+ bind", Txt3);
+            bind.MinWidth = 62;
+            bind.ToolTip = "Клик — задать хоткей этого приложения";
+            bind.Tag = r;
+            bind.Click += Bind_Click;
+            Grid.SetColumn(bind, 1);
+            grid.Children.Add(bind);
+
+            // скоуп окно/проц
+            var scope = Pill(r.TitleContains == "" ? "проц" : "окно", Txt3);
+            scope.ToolTip = "Одно окно или весь процесс";
+            scope.Tag = r;
+            scope.Click += Scope_Click;
+            Grid.SetColumn(scope, 2);
+            grid.Children.Add(scope);
+
+            // режим
+            var (mt, mc) = r.Mode switch
+            {
+                HideMode.Always => ("всегда", Red),
+                HideMode.OnMode => ("режим", Accent),
+                _ => ("выкл", Txt3)
+            };
+            var mode = Pill(mt, mc);
+            mode.MinWidth = 62;
+            mode.ToolTip = "Клик — сменить режим";
+            mode.Tag = r;
+            mode.Click += Mode_Click;
+            Grid.SetColumn(mode, 3);
+            grid.Children.Add(mode);
+
+            var del = new Button
+            {
+                Style = (Style)FindResource("IconBtn"),
+                Content = "✕",
+                Foreground = Txt3,
+                Margin = new Thickness(4, 0, 0, 0)
+            };
+            del.Tag = r;
+            del.Click += Del_Click;
+            Grid.SetColumn(del, 4);
+            grid.Children.Add(del);
+
+            return grid;
         }).ToList();
     }
 
-    void Mode_Changed(object sender, SelectionChangedEventArgs e)
+    void Del_Click(object s, RoutedEventArgs e)
     {
-        if (_loading || sender is not ComboBox cb || cb.Tag is not Row row) return;
-        var mode = cb.SelectedIndex switch { 1 => HideMode.OnMode, 2 => HideMode.Always, _ => HideMode.Off };
-        _engine.SetRule(row.Win, mode, row.WholeProc);
+        if (s is not Button { Tag: Rule r }) return;
+        _s.Rules.Remove(r);
+        _s.Save();
+        _engine.NotifyRulesChanged();
+        _engine.TickPublic();
+        RefreshRules();
+        RefreshWindows();
+    }
+
+    void Scope_Click(object s, RoutedEventArgs e)
+    {
+        if (s is not Button { Tag: Rule r }) return;
+        if (r.TitleContains == "")
+            r.TitleContains = r.FullTitle.Length > 0 ? r.FullTitle : r.Proc;
+        else
+            r.TitleContains = "";
+        _s.Save();
+        _engine.TickPublic();
         RefreshRules();
     }
 
-    void WholeProc_Click(object sender, RoutedEventArgs e)
+    void Mode_Click(object s, RoutedEventArgs e)
     {
-        if (sender is not CheckBox box || box.DataContext is not Row row) return;
-        var mode = row.ModeIndex switch { 1 => HideMode.OnMode, 2 => HideMode.Always, _ => HideMode.Off };
-        _engine.SetRule(row.Win, mode, row.WholeProc);
+        if (s is not Button { Tag: Rule r }) return;
+        r.Mode = r.Mode switch { HideMode.OnMode => HideMode.Always, HideMode.Always => HideMode.Off, _ => HideMode.OnMode };
+        _s.Save();
+        _engine.TickPublic();
         RefreshRules();
     }
+
+    // --- бинд на правило ---
+    void Bind_Click(object s, RoutedEventArgs e)
+    {
+        if (s is not Button b || b.Tag is not Rule r) return;
+        _binding = r;
+        b.Content = "жми…";
+        b.Focus();
+        b.PreviewKeyDown -= RuleKeyDown;
+        b.PreviewKeyDown += RuleKeyDown;
+    }
+
+    void RuleKeyDown(object s, System.Windows.Input.KeyEventArgs e)
+    {
+        if (_binding == null) return;
+        e.Handled = true;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+            or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin) return;
+        var parts = new List<string>();
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) parts.Add("Ctrl");
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
+        parts.Add(key.ToString());
+        _binding.Hotkey = string.Join("+", parts);
+        _binding = null;
+        _s.Save();
+        _engine.NotifyRulesChanged();
+        Keyboard.ClearFocus();
+        RefreshRules();
+    }
+
+    // --- мастер-хоткей ---
+    void Hotkey_GotFocus(object s, RoutedEventArgs e) => HotkeyBox.Text = "зажми комбо…";
 
     void HotkeyBox_LostFocus(object s, RoutedEventArgs e)
     {
-        _s.Hotkey = HotkeyBox.Text;
-        _s.Save();
-        ((App)Application.Current).RegisterHotkey();
+        if (HotkeyBox.Text == "зажми комбо…") HotkeyBox.Text = _s.Hotkey;
     }
 
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        HotkeyBox.PreviewKeyDown -= HotkeyBox_KeyDown;
+        HotkeyBox.PreviewKeyDown += HotkeyBox_KeyDown;
+    }
+
+    void HotkeyBox_KeyDown(object s, System.Windows.Input.KeyEventArgs e)
+    {
+        e.Handled = true;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt
+            or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin) return;
+        var parts = new List<string>();
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) parts.Add("Ctrl");
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
+        parts.Add(key.ToString());
+        var text = string.Join("+", parts);
+        HotkeyBox.Text = text;
+        _s.Hotkey = text;
+        _s.Save();
+        ((App)Application.Current).RegisterHotkey();
+        Keyboard.ClearFocus();
+    }
+
+    // ---------- прочее ----------
     void Autostart_Changed(object s, RoutedEventArgs e)
     {
         if (_loading) return;
@@ -157,34 +291,13 @@ public partial class MainWindow : Window
         App.SetAutostart(_s.StartWithWindows);
     }
 
+    void TitleBar_Drag(object s, MouseButtonEventArgs e) { if (e.LeftButton == MouseButtonState.Pressed) DragMove(); }
+    void Min_Click(object s, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    void Close_Click(object s, RoutedEventArgs e) => Close();
+
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (_s.MinimizeToTray)
-        {
-            e.Cancel = true;
-            Hide();
-        }
+        if (_s.MinimizeToTray) { e.Cancel = true; Hide(); }
         base.OnClosing(e);
-    }
-
-    // Хоткей-бокс: зажал комбо — записало текстом
-    protected override void OnActivated(EventArgs e)
-    {
-        base.OnActivated(e);
-        HotkeyBox.PreviewKeyDown += HotkeyBox_KeyDown;
-    }
-
-    void HotkeyBox_KeyDown(object s, System.Windows.Input.KeyEventArgs e)
-    {
-        e.Handled = true;
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift or Key.RightShift
-            or Key.LWin or Key.RWin) return;
-        var parts = new List<string>();
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control)) parts.Add("Ctrl");
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
-        parts.Add(key.ToString());
-        HotkeyBox.Text = string.Join("+", parts);
     }
 }

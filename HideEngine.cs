@@ -19,6 +19,20 @@ public sealed class HideEngine
         set { _s.ModeOn = value; _s.Save(); Tick(null); }
     }
 
+    public event Action? RulesChanged;   // хоткеи/список правил поменялись
+
+    // Хоткей правила: скрыто -> показать, видно -> скрыть обратно в прошлый режим
+    public void ToggleRule(Rule r)
+    {
+        if (r.Mode == HideMode.Off) r.Mode = r.PrevMode == HideMode.Off ? HideMode.Always : r.PrevMode;
+        else { r.PrevMode = r.Mode; r.Mode = HideMode.Off; }
+        _s.Save();
+        Tick(null);
+    }
+
+    public void NotifyRulesChanged() => RulesChanged?.Invoke();
+    public void TickPublic() => Tick(null);
+
     void Tick(object? _)
     {
         foreach (var w in Native.EnumUserWindows())
@@ -47,8 +61,9 @@ public sealed class HideEngine
         var ex = _s.Rules.FirstOrDefault(r => r.Proc.Equals(w.Proc, StringComparison.OrdinalIgnoreCase) && r.TitleContains == pattern);
         if (mode == HideMode.Off) _s.Rules.Remove(ex!);
         else if (ex != null) ex.Mode = mode;
-        else _s.Rules.Add(new Rule { Proc = w.Proc, TitleContains = pattern, Mode = mode });
+        else _s.Rules.Add(new Rule { Proc = w.Proc, TitleContains = pattern, FullTitle = w.Title, Mode = mode });
         _s.Save();
         Tick(null);
+        RulesChanged?.Invoke();
     }
 }

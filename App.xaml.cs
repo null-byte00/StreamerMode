@@ -1,7 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Interop;
 using Microsoft.Win32;
-using System.Diagnostics;
 
 namespace StreamerMode;
 
@@ -21,6 +20,7 @@ public partial class App : System.Windows.Application
 
         _s = Settings.Load();
         _engine = new HideEngine(_s);
+        _engine.RulesChanged += () => Dispatcher.Invoke(RegisterHotkey);
         _win = new MainWindow(_s, _engine);
         _win.Show();
         _win.SourceInitialized += (_, _) =>
@@ -33,23 +33,44 @@ public partial class App : System.Windows.Application
         base.OnStartup(e);
     }
 
+    // Мастер-бинд + бинд каждого правила
     public void RegisterHotkey()
     {
-        if (_hwnd != IntPtr.Zero) Hotkey.Register(_hwnd, _s.Hotkey);
+        if (_hwnd == IntPtr.Zero) return;
+        Hotkey.UnregisterAll(_hwnd, _s.Rules.Count);
+        Hotkey.Register(_hwnd, _s.Hotkey, Hotkey.MasterId);
+        for (int i = 0; i < _s.Rules.Count; i++)
+            if (_s.Rules[i].Hotkey.Length > 0)
+                Hotkey.Register(_hwnd, _s.Rules[i].Hotkey, Hotkey.RuleIdBase + i);
     }
 
     IntPtr WndProc(IntPtr hwnd, int msg, IntPtr w, IntPtr l, ref bool handled)
     {
-        if (msg == Native.WM_HOTKEY && w.ToInt32() == Hotkey.Id)
+        if (msg == Native.WM_HOTKEY)
         {
-            _engine.ModeOn = !_engine.ModeOn;
-            _tray?.ShowBalloonTip(1500, "StreamerMode",
-                _engine.ModeOn ? "Стример-режим ВКЛ — приватные окна скрыты" : "Стример-режим выкл",
-                System.Windows.Forms.ToolTipIcon.Info);
-            handled = true;
+            int id = w.ToInt32();
+            if (id == Hotkey.MasterId)
+            {
+                _engine.ModeOn = !_engine.ModeOn;
+                Toast(_engine.ModeOn ? "Стример-режим ВКЛ — приватные окна скрыты" : "Стример-режим выкл");
+                handled = true;
+            }
+            else if (id >= Hotkey.RuleIdBase)
+            {
+                int i = id - Hotkey.RuleIdBase;
+                if (i < _s.Rules.Count)
+                {
+                    var r = _s.Rules[i];
+                    _engine.ToggleRule(r);
+                    Toast(r.Proc + (r.Mode == HideMode.Off ? " — видно в записи" : " — скрыт"));
+                    handled = true;
+                }
+            }
         }
         return IntPtr.Zero;
     }
+
+    void Toast(string text) => _tray?.ShowBalloonTip(1400, "StreamerMode", text, System.Windows.Forms.ToolTipIcon.Info);
 
     void SetupTray()
     {
@@ -78,7 +99,6 @@ public partial class App : System.Windows.Application
 
     void RealExit()
     {
-        // снять affinity со всего перед выходом
         _s.ModeOn = false;
         foreach (var w in Native.EnumUserWindows())
             if (w.Affinity != Native.WDA_NONE) Native.SetWindowDisplayAffinity(w.Hwnd, Native.WDA_NONE);

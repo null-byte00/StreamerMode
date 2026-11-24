@@ -10,8 +10,12 @@ public sealed class Rule
 {
     public string Proc { get; set; } = "";
     public string TitleContains { get; set; } = "";   // пусто = любое окно процесса
+    public string FullTitle { get; set; } = "";       // исходный заголовок — для скоупа «окно» и отображения
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public HideMode Mode { get; set; } = HideMode.OnMode;
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public HideMode PrevMode { get; set; } = HideMode.Always; // куда вернуть хоткеем
+    public string Hotkey { get; set; } = "";          // свой бинд: скрыл/вернул приложение
 
     public bool Matches(Native.Win w) =>
         string.Equals(w.Proc, Proc, StringComparison.OrdinalIgnoreCase)
