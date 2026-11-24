@@ -1,4 +1,5 @@
-﻿using System.Windows;
+﻿using System.IO;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
@@ -34,18 +35,58 @@ public partial class MainWindow : Window
         HotkeyBox.Text = s.Hotkey;
         AutostartBox.IsChecked = s.StartWithWindows;
         _loading = false;
-        _engine.StateChanged += () => Dispatcher.Invoke(UpdateStatus);
+        _engine.StateChanged += () => Dispatcher.Invoke(RefreshModeStatus);
         RefreshWindows();
         RefreshRules();
+        CheckUpdate();
     }
 
-    void UpdateStatus() =>
+    string _updateUrl = "";
+
+    async void CheckUpdate()
+    {
+        UpdateStatus.Text = "проверяю обновления…";
+        var (hasNew, tag, url) = await Updater.CheckAsync();
+        if (hasNew)
+        {
+            UpdateStatus.Text = "есть обновление " + tag + " (у тебя " + Updater.Current + ")";
+            UpdateBtn.Content = "Обновить до " + tag;
+            UpdateBtn.Visibility = Visibility.Visible;
+            _updateUrl = url;
+        }
+        else UpdateStatus.Text = "v" + Updater.Current + " — последняя";
+    }
+
+    bool _updating;
+
+    async void Update_Click(object s, RoutedEventArgs e)
+    {
+        if (_updating) return;
+        _updating = true;
+        try
+        {
+            var tmp = Path.Combine(Path.GetTempPath(), "StreamerMode-new.exe");
+            var prog = new Progress<int>(p => UpdateStatus.Text = "качаю… " + p + "%");
+            UpdateBtn.IsEnabled = false;
+            await Updater.DownloadAsync(_updateUrl, tmp, prog);
+            UpdateStatus.Text = "ставлю и перезапускаю…";
+            Updater.ApplyAndRestart(tmp);
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus.Text = "ошибка: " + ex.Message;
+            _updating = false;
+            UpdateBtn.IsEnabled = true;
+        }
+    }
+
+    void RefreshModeStatus() =>
         ModeStatus.Text = _s.ModeOn ? "ВКЛ — окна 'по режиму' скрыты в записи" : "выкл — всё видно в записи";
 
     public void ToggleMode() => ModeToggle.IsChecked = !_s.ModeOn;
 
-    void ModeToggle_Checked(object s, RoutedEventArgs e) { if (!_loading) { _engine.ModeOn = true; UpdateStatus(); } }
-    void ModeToggle_Unchecked(object s, RoutedEventArgs e) { if (!_loading) { _engine.ModeOn = false; UpdateStatus(); } }
+    void ModeToggle_Checked(object s, RoutedEventArgs e) { if (!_loading) { _engine.ModeOn = true; RefreshModeStatus(); } }
+    void ModeToggle_Unchecked(object s, RoutedEventArgs e) { if (!_loading) { _engine.ModeOn = false; RefreshModeStatus(); } }
 
     void Refresh_Click(object s, RoutedEventArgs e) => RefreshWindows();
 

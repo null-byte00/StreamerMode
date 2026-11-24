@@ -49,6 +49,11 @@
                              ToolTip="Кликни и зажми комбинацию"/>
                     <TextBlock Text="— тоглит режим отовсюду" Foreground="#8a8a9a" VerticalAlignment="Center"/>
                 </DockPanel>
+                <DockPanel Margin="0,8,0,0">
+                    <TextBlock x:Name="UpdateStatus" Text="" Foreground="#8a8a9a" VerticalAlignment="Center"/>
+                    <Button x:Name="UpdateBtn" Content="Обновить" Visibility="Collapsed" Click="Update_Click"
+                            HorizontalAlignment="Right" Padding="14,4"/>
+                </DockPanel>
             </StackPanel>
         </Border>
 
